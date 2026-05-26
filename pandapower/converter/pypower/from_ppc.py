@@ -470,7 +470,7 @@ def _from_ppc_gencost(net, ppc, gen_lookup, check=True):
         if any(is_poly2 & (ncost > 3)):
             logger.warning("The pandapower poly_cost table only supports up to 2nd order " +
                            "polynomials. The ppc higher order polynomials cannot be converted.")
-            ncost[is_poly2 & (ncost > 3), NCOST] = 3
+            ncost[is_poly2 & (ncost > 3)] = 3
         is_cost1 = np.isclose(ncost, 1)
         is_cost2 = np.isclose(ncost, 2)
         is_cost3 = np.isclose(ncost, 3)
