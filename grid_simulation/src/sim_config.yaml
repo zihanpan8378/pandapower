@@ -1,0 +1,14 @@
+grids:
+
+  grid_1:
+    region: "CA_ON"
+    # The initial power demand of data centers as a fraction of gross load
+    dc_init_power_shares:
+      - 0.025
+    num_renewable_sources: 4
+
+  grid_2:
+    region: "US_CAL_CISO"
+    dc_init_power_shares:
+      - 0.025
+    num_renewable_sources: 4

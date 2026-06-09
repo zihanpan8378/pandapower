@@ -5,7 +5,7 @@ from typing import Tuple
 
 
 # All types of line elements and their corresponding powerflow result, bus connection, and active power columns
-_BRANCH_SPECS = (
+BRANCH_SPECS = (
     # (element_table, result_table, from_col,  to_col,   flow_col)
     ("line",      "res_line",      "from_bus", "to_bus", "p_from_mw"),
     ("trafo",     "res_trafo",     "hv_bus",   "lv_bus", "p_hv_mw"),
@@ -14,7 +14,7 @@ _BRANCH_SPECS = (
 
 # Types of generation components considered by this bialek's tracing implementation for gross supply,
 # and their corresponding powerflow result column
-_GENERATION_SOURCES = [
+GENERATION_SOURCES = [
     ("ext_grid", "res_ext_grid"),
     ("gen", "res_gen"),     # Voltage-controlled generatos
     ("sgen", "res_sgen"),   # Constant power generators
@@ -23,7 +23,7 @@ _GENERATION_SOURCES = [
 
 # Types of demand components considered by this bialek's tracing implementation for gross demand,
 # and their correspodning poweflow result column
-_DEMAND_SOURCES = [
+DEMAND_SOURCES = [
     ("load", "res_load"),
     ("shunt", "res_shunt"),
     ("ward", "res_ward"),
@@ -52,7 +52,7 @@ def _collect_branches(net: pandapowerNet) -> Tuple[np.ndarray, np.ndarray, np.nd
     from_ids, to_ids, flows = [], [], []
 
     # Collect all the branch flows for all possible pandapower line elements
-    for elem, res, from_col, to_col, flow_col in _BRANCH_SPECS:
+    for elem, res, from_col, to_col, flow_col in BRANCH_SPECS:
 
         if elem not in net or len(net[elem]) == 0:
             continue
@@ -121,10 +121,6 @@ def create_grid_incidence_matrix(net: pandapowerNet) -> np.ndarray:
     # Return empty matrix if grid has no buses
     if bus_count == 0:
         return np.empty(shape=(0, 0))
- 
-    # Maps pandapower's bus_id to the underlying bus dataframe index
-    # Both uniquely identify bus, but can be different
-    bus_idx_map = {bus_id: i for i, bus_id in enumerate(net.bus.index)}
     
     # Get all line connections
     from_bus, to_bus, _ = _collect_branches(net)
@@ -132,8 +128,8 @@ def create_grid_incidence_matrix(net: pandapowerNet) -> np.ndarray:
  
     res_mat = np.zeros(shape=(bus_count, branch_count))
     for line_idx in range(branch_count):
-        line_start_bus_df_idx = bus_idx_map[from_bus[line_idx]]
-        line_end_bus_df_idx = bus_idx_map[to_bus[line_idx]]
+        line_start_bus_df_idx = net.bus.index.get_loc(from_bus[line_idx])
+        line_end_bus_df_idx = net.bus.index.get_loc(to_bus[line_idx])
         res_mat[line_start_bus_df_idx, line_idx] = 1
         res_mat[line_end_bus_df_idx, line_idx] = -1
 
@@ -239,11 +235,11 @@ def gross_gen_demand(net: pandapowerNet) -> Tuple[np.ndarray, np.ndarray]:
                 P_D[bus_idx_map[bus_id]] += -val
 
     # Check all possible generation sources for determining gross generation
-    for source in _GENERATION_SOURCES:
+    for source in GENERATION_SOURCES:
         _update_gross_generation(source)
 
     # Check all possible demand sources for determining gross generation
-    for source in _DEMAND_SOURCES:
+    for source in DEMAND_SOURCES:
         _update_gross_demand(source)
 
     return P_G, P_D
