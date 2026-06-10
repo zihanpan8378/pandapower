@@ -3,8 +3,8 @@ import numpy as np
 from typing import List
 from pandapower import pandapowerNet
 from constants import (
-    NONRENEWABLE_BASE_COST,
-    RENEWABLE_BASE_COST
+    SOURCE_LIMITS,
+    SOURCE_COSTS,
 )
 from run_bialek import GENERATION_SOURCES
 
@@ -14,28 +14,27 @@ class ProcessGrid:
     Class that contains helper methods to modify the grid for simulation.
     """
 
-    def sync_generator_limits(self, net: pandapowerNet, renewable_sources: List[int]) -> None:
+    def sync_generator_limits(self, net: pandapowerNet, source_label: str) -> None:
         """
         Updates the generation limits for non-renewable grid generation components.
 
         Args:
             net: The pandapower network to modify
-            renewable_sources: The list of generator ids that are renewable sources
+            source_label: The label for the column containing the source types
         """
+        gross_load = net.load["p_mw"].sum()        
+
         for elem, _ in GENERATION_SOURCES:
-
-            # Right now, only generators can be set as renewable sources
-            # We handle the "gen" case separately
-            if elem == "gen" and len(net[elem]) > 0:
-                non_ren_mask = ~net.gen.index.isin(renewable_sources)
-                net.gen.loc[non_ren_mask, "max_p_mw"] = 99999.0
-
-            # Set the max power of the generation source to be virtually uncapped
-            elif len(net[elem]) > 0:
-                net[elem]["max_p_mw"] = 99999.0
+            if elem not in net or len(net[elem]) == 0:
+                continue
+            source_types = net[elem][source_label]
+            for source_type, limit_factor in SOURCE_LIMITS.items():
+                source_mask = source_types == source_type
+                if source_mask.any():
+                    net[elem].loc[source_mask, "max_p_mw"] = limit_factor * gross_load
 
 
-    def sync_generator_costs(self, net: pandapowerNet, renewable_sources: List[int]) -> None:
+    def sync_generator_costs(self, net: pandapowerNet, source_label: str) -> None:
         """
         Updates costs for all elements in poly_cost. 
         
@@ -45,26 +44,29 @@ class ProcessGrid:
 
         Args:
             net: The pandapower network to modify 
-            renewable_sources: The list of 'gen' element ids that represent renewable sources
+            source_label: The label for the column containing the source types
         """
-        # An element is only renewable if it is a 'gen' and its ID is in the renewable list
-        is_gen = net.poly_cost["et"] == "gen"
-        is_renewable_gen = is_gen & net.poly_cost["element"].isin(renewable_sources)
-        
-        # Apply costs: Renewable if it matches the mask above, non-renewable for everything else
-        net.poly_cost["cp0_eur"] = np.where(
-            is_renewable_gen,
-            RENEWABLE_BASE_COST,
-            NONRENEWABLE_BASE_COST
-        )
-        net.poly_cost["cp2_eur_per_mw2"] = np.where(
-            is_renewable_gen,
-            RENEWABLE_BASE_COST,
-            NONRENEWABLE_BASE_COST
-        )
+        for elem, _ in GENERATION_SOURCES:
+            if elem not in net or len(net[elem]) == 0:
+                continue
+            source_types = net[elem][source_label]
+            for source_type, cost in SOURCE_COSTS.items():
+                source_mask = source_types == source_type
+                matched_indices = net[elem].index[source_mask]
+                if source_mask.any():
+                    # We update the cost for all elements of this type 
+                    # with the same generation source type being considered
+                    net.poly_cost.loc[
+                        net.poly_cost["element"].isin(matched_indices) 
+                        & (net.poly_cost["et"] == elem), "cp1_eur_per_mw"
+                    ] = cost
+  
 
-
-    def modify_non_datacenter_load(self, net: pandapowerNet, data_centers: List[int]) -> None:
+    def modify_non_datacenter_load(
+        self, 
+        net: pandapowerNet, 
+        dc_label: str
+    ) -> None:
         """
         Updates the active power of non data center loads to be 0.
         
@@ -72,8 +74,8 @@ class ProcessGrid:
             net: The pandapower network to modify
             data_centers: The list of load ids that are data centers
         """
-        non_data_center_mask = ~net.load.index.isin(data_centers) 
-        net.load.loc[non_data_center_mask, "p_mw"] = 0.0
+        non_dc_mask = ~net.load[dc_label]
+        net.load.loc[non_dc_mask, "p_mw"] = 0.0
 
 
     def unconstrain_tranmission(self, net: pandapowerNet) -> None:

@@ -18,6 +18,23 @@ CARBON_INTENSITIES: Dict[str, float] = {
     "wind": 11.0
 }
 
+# TODO: change energy costs, other constants to be per type based
+NONRENEWABLE_BASE_COST: float = 100_000_000.0
+RENEWABLE_BASE_COST: float = 100.0
+
+SOURCE_COSTS: Dict[str, float] = {
+    "coal": NONRENEWABLE_BASE_COST,
+    "solar": RENEWABLE_BASE_COST,
+    "wind": RENEWABLE_BASE_COST
+}
+
+# Source limits are set to be fraction of the gross load demand
+SOURCE_LIMITS: Dict[str, float] = {
+    "coal": 1000.0,
+    "solar": 0.5,
+    "wind": 0.5
+}
+
 # Define paths for weather data per region
 weather_data_base_path = "/mnt/grid-cloud-migration-estimates_copy/data/weather"
 WEATHER_DATA_PATHS: Dict[str, str] = {
@@ -26,10 +43,6 @@ WEATHER_DATA_PATHS: Dict[str, str] = {
     "US_MIDA_PJM": os.path.join(weather_data_base_path, "processed", "US-MID-PJM.csv"),
     "US_TEX_ERCO": os.path.join(weather_data_base_path, "processed", "US-TEX-ERCO.csv"),
 }
-
-# TODO: change energy costs, other constants to be per type based
-NONRENEWABLE_BASE_COST: float = 100_000_000.0
-RENEWABLE_BASE_COST: float = 100.0
 
 
 ALLOWED_GRID_REGIONS: List[str] = [
