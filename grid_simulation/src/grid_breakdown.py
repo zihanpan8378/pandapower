@@ -4,6 +4,9 @@ import pandapower.networks as pn
 import pandas as pd
 import pandapower as pp
 
+from grid_custom import DatacenterGrid
+
+
 def export_network_summary(net, filename="network_summary.csv", save_csv=False):
     """
     Takes a pandapower network, counts the elements in each component table,
@@ -40,6 +43,7 @@ def export_network_summary(net, filename="network_summary.csv", save_csv=False):
     print("\nPreview of counts:")
     print(df_summary.to_string(index=False))
 
+
 if __name__ == "__main__":
     # Set up the command line argument parser
     parser = argparse.ArgumentParser(description="Analyze a Pandapower grid and optionally export a component summary.")
@@ -52,12 +56,11 @@ if __name__ == "__main__":
     # 1. Load the network
     # grid_m = os.path.join('central-illinois-200', 'case_ACTIVSg200.m')
     # net = from_mpc(grid_m)
-    net = pn.case30()
-    pp.runpp(net)
+    net = pn.case300()
+    grid = DatacenterGrid(net=net, grid_region="CA_ON") # type: ignore
     # print(net.poly_cost)
     # print(net.gen)
     # print(net.line["max_i_ka"])
-    print(net["load"])
 
     # 2. Run the export function, passing the boolean argument
-    export_network_summary(net, filename="case200_breakdown.csv", save_csv=args.save_csv)
+    export_network_summary(grid._net, filename="case300_breakdown.csv", save_csv=args.save_csv)

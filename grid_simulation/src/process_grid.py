@@ -4,7 +4,8 @@ from typing import List
 from pandapower import pandapowerNet
 from constants import (
     SOURCE_LIMITS,
-    SOURCE_COSTS,
+    SOURCE_BASE_COSTS,
+    SOURCE_LINEAR_COSTS
 )
 from run_bialek import GENERATION_SOURCES
 
@@ -14,24 +15,28 @@ class ProcessGrid:
     Class that contains helper methods to modify the grid for simulation.
     """
 
-    def sync_generator_limits(self, net: pandapowerNet, source_label: str) -> None:
-        """
-        Updates the generation limits for non-renewable grid generation components.
+    # TODO: Conflicts with modifying data load inside the run_flow function
+    # Coal sources are constant and have no variation, this should be set in initialization
+    
+    # def sync_generator_limits(self, net: pandapowerNet, source_label: str) -> None:
+    #     """
+    #     Updates the generation limits for non-renewable grid generation components.
 
-        Args:
-            net: The pandapower network to modify
-            source_label: The label for the column containing the source types
-        """
-        gross_load = net.load["p_mw"].sum()        
+    #     Args:
+    #         net: The pandapower network to modify
+    #         source_label: The label for the column containing the source types
+    #     """
+    #     gross_load = net.load["p_mw"].sum()        
 
-        for elem, _ in GENERATION_SOURCES:
-            if elem not in net or len(net[elem]) == 0:
-                continue
-            source_types = net[elem][source_label]
-            for source_type, limit_factor in SOURCE_LIMITS.items():
-                source_mask = source_types == source_type
-                if source_mask.any():
-                    net[elem].loc[source_mask, "max_p_mw"] = limit_factor * gross_load
+    #     for elem, _ in GENERATION_SOURCES:
+    #         if elem not in net or len(net[elem]) == 0:
+    #             continue
+    #         source_types = net[elem][source_label]
+    #         for source_type, limit_factor in SOURCE_LIMITS.items():
+    #             source_mask = (source_types == source_type)
+    #             if source_mask.any():
+    #                 net[elem].loc[source_mask, "max_p_mw"] = limit_factor * gross_load
+    #                 net[elem].loc[source_mask, "min_p_mw"] = 0.0 
 
 
     def sync_generator_costs(self, net: pandapowerNet, source_label: str) -> None:
@@ -46,21 +51,26 @@ class ProcessGrid:
             net: The pandapower network to modify 
             source_label: The label for the column containing the source types
         """
+        net.poly_cost["cp1_eur_per_mw"] = 0.0
+        net.poly_cost["cp2_eur_per_mw2"] = 0.0
+
         for elem, _ in GENERATION_SOURCES:
             if elem not in net or len(net[elem]) == 0:
                 continue
             source_types = net[elem][source_label]
-            for source_type, cost in SOURCE_COSTS.items():
-                source_mask = source_types == source_type
+
+            # TODO: code smell
+            for source_type, base_cost in SOURCE_BASE_COSTS.items():
+                source_mask = (source_types == source_type)
                 matched_indices = net[elem].index[source_mask]
                 if source_mask.any():
                     # We update the cost for all elements of this type 
                     # with the same generation source type being considered
-                    net.poly_cost.loc[
-                        net.poly_cost["element"].isin(matched_indices) 
-                        & (net.poly_cost["et"] == elem), "cp1_eur_per_mw"
-                    ] = cost
-  
+                    mask = (net.poly_cost["element"].isin(matched_indices) 
+                            & (net.poly_cost["et"] == elem))
+                    net.poly_cost.loc[mask, "cp0_eur"] = base_cost
+                    net.poly_cost.loc[mask, "cp1_eur_per_mw"] = SOURCE_LINEAR_COSTS[source_type]
+
 
     def modify_non_datacenter_load(
         self, 
@@ -74,7 +84,7 @@ class ProcessGrid:
             net: The pandapower network to modify
             data_centers: The list of load ids that are data centers
         """
-        non_dc_mask = ~net.load[dc_label]
+        non_dc_mask = ~net.load[dc_label].astype(bool)
         net.load.loc[non_dc_mask, "p_mw"] = 0.0
 
 
@@ -87,6 +97,10 @@ class ProcessGrid:
             net: The pandapower network to update
         """
         net.line['max_i_ka'] = 99999.0
+        net.line["max_loading_percent"] = 99999.0
+        
+        net.bus['max_vm_pu'] = 99999.0
+        net.bus['min_vm_pu'] = 0.0
 
         # 2. Unconstrain transformers (Limit is in MVA)
         if len(net.trafo) > 0:

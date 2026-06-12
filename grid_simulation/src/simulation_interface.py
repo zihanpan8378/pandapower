@@ -5,14 +5,18 @@ import random
 import numpy as np
 
 from grid_custom import DatacenterGrid
-from sim_config import GridSimConfig
-from constants import RENEWABLE_SOURCE_TYPES, OVERPROVISION_FACTOR
+from constants import OVERPROVISION_FACTOR
 
 from typing import List
 from pandapower import pandapowerNet
 
+from generation_types import GenerationType
+from grid_regions import GridRegion
 
-_SHIFT_PROPORTION = 0.3
+from sim_config import GridConfig, DataCenterConfig
+
+
+_SHIFT_PROPORTION = 0.1
 
 
 class GridObserver:
@@ -22,6 +26,13 @@ class GridObserver:
     """
     
     def __init__(self, num_grids: int, grid_names: List[str]) -> None:
+        """
+        Constructs an instance of GridObserver.
+
+        Args:
+            num_grids:  The number of grids in the simulation, used to initialize data structures for recording metrics.
+            grid_names: A list of names for each grid.
+        """
         self._ci_data: List[List[float]] = [
             [] for _ in range(num_grids)
         ]
@@ -36,15 +47,22 @@ class GridObserver:
         Records the carbon intensity and carbon emission rate for a given grid at a specific time step.
 
         Args:
-            grid_idx: The index of the grid to record metrics for
-            carbon_intensity: The carbon intensity value to record
-            carbon_emission_rate: The carbon emission rate value to record
+            grid_idx:               The index of the grid to record metrics for
+            carbon_intensity:       The carbon intensity value to record
+            carbon_emission_rate:   The carbon emission rate value to record
         """
         self._ci_data[grid_idx].append(carbon_intensity)
         self._ce_data[grid_idx].append(carbon_emission_rate)
 
 
     def plot_ci_data(self, save_path: str = "carbon_intensity.png") -> None:
+        """
+        Plots the carbon intensity data recorded for each grid over time. 
+
+        Args:
+            save_path: The path to save the generated plot image.
+        """
+
         plt.figure(figsize=(10, 6))
         num_grids = len(self._ci_data)
 
@@ -64,7 +82,6 @@ class GridObserver:
         plt.close()
         
 
-
 class GridSimulation:
     """
     Class that represents running a mock grid simulation. Requires initial load
@@ -72,78 +89,135 @@ class GridSimulation:
     of gross load demand.
     """
 
-    def __init__(self, sim_config: str, raw_grids: List[pandapowerNet]) -> None:
+    def __init__(
+        self, 
+        grid_config: GridConfig,
+        enable_shifting: bool,
+        shifting_threshold: float
+    ) -> None:
         """
         Constructs an instance of GridSimulation.
         
         Args:
-            sim_config: The path to the simulation configuration yaml file.
-            raw_grids: The list of pandapower networks to use as the underlying grids for the simulation. 
-                       Should be in the same order as the grids defined in the sim_config yaml file.
+            grid_config: The grid configuration object.
         """
-        config = GridSimConfig(config_yaml = sim_config)
-        self._grids: List[DatacenterGrid] = []
-        grid_names: List[str] = []
-        num_grids = len(config.grid_config)
-        
-        assert num_grids == len(raw_grids)
+        self._grid_config: GridConfig       = grid_config
+        self._weather_index: int            = 0
+        self._num_grids: int                = len(self._grid_config.grid_regions)
+        self._enable_shifting: bool         = enable_shifting
+        self._shifting_threshold: float     = shifting_threshold
+        self._grids: List[DatacenterGrid]   = []
 
-        # Create all DataCenter grids defined in the simualtion configuration
-        for idx, grid_cfg in enumerate(config.grid_config):
-            region = grid_cfg["region"]
-            print(f"[init] Setting up grid {idx} (region: {region})")
-            net = raw_grids[idx]
-            self._grids.append(DatacenterGrid(net=net, grid_region=region))
-            self._grids[-1].simplify_grid()
-            grid_names.append(region)
-            gross_load_demand = self._grids[-1].get_gross_load_demand()
-            print(f"[init]   Gross load demand: {gross_load_demand:.2f} MW")
+        # Create all DataCenter grids defined in the simulation configuration
+        for grid_region, dc_configs in self._grid_config.grid_regions.items(): 
 
-            # For each grid, initialize data centers and configure their power demand
-            load_ids = list(self._grids[-1]._net.load.index)
-            num_dcs = len(grid_cfg["dc_init_power_shares"])
-            print(f"[init]   Assigning {num_dcs} data center(s)")
-            for i, power_percentage in enumerate(grid_cfg["dc_init_power_shares"]):
-                assign_dc_success: bool = self._grids[-1].assign_new_data_center(
-                    load_id=load_ids[i],
-                    idle_power=gross_load_demand * power_percentage
-                )
-                assert assign_dc_success
+            grid = DatacenterGrid(
+                grid_region = grid_region,
+                net         = self._grid_config.pp_grid 
+            )
+            self._grids.append(grid)
 
-            # For each grid, initialize renewable sources (if any)
-            # Gross load demand now includes data center loads
-            gross_load_demand = self._grids[-1].get_gross_load_demand()
-            num_renewable_sources = grid_cfg["num_renewable_sources"]
-            print(f"[init]   Assigning {num_renewable_sources} renewable source(s)")
+            load_ids = [ idx for idx in range(len(dc_configs)) ]
+            idle_powers = [ dc_config.load_share for dc_config in dc_configs ]
+            onsite_source_types = [ GenerationType.SOLAR for _ in dc_configs ]
+            self.__setup_grid(
+                grid                = grid,
+                load_ids            = load_ids,
+                idle_powers         = idle_powers,
+                onsite_source_types = onsite_source_types,
+                renewable_share     = self._grid_config.renewable_share
+            )
 
-            # TODO: Maybe add more complicated energy profile for each renewable sources
-            gen_ids = list(self._grids[-1]._net.gen.index)
-            for i in range(num_renewable_sources):
-                # Randomly choose a generation type
-                gen_type = random.choice(RENEWABLE_SOURCE_TYPES)
-                assign_renewable_success: bool = self._grids[-1].assign_renewable_source(
-                    gen_id=gen_ids[i],
-                    max_p_mw=gross_load_demand * OVERPROVISION_FACTOR / num_renewable_sources,
-                    gen_type=gen_type
-                )
-                assert assign_renewable_success
-        
         # Create the observer to record data during simnulation
+        grid_names = [ region.name for region in self._grid_config.grid_regions.keys() ]
         self._observer = GridObserver(
-            num_grids  = num_grids,
+            num_grids  = self._num_grids,
             grid_names = grid_names
         )
         
 
-    def step(self, shifting_enabled: bool, weather_index: int) -> None:
+    def __setup_grid(
+        self, 
+        grid: DatacenterGrid, 
+        load_ids: List[int], 
+        idle_powers: List[float], 
+        onsite_source_types: List[GenerationType],
+        renewable_share: float 
+    ) -> None:
+        """
+        Sets up data center loads with onsite generation sources for a given grid.
+
+        The onsite generation sources are used before electricity from other sources
+        in the grid are used.
+        
+        Args:
+            grid:                  The data center grid to set up
+            load_ids:              The list of load ids for the data centers
+            idle_powers:           The list of idle power demands for the data centers, should be in the same order as load_ids
+            onsite_source_types:   The list of generation types for the onsite sources, should be in the same order as load_ids
+            renewable_share:       The percentage of renewable energy in the grid
+        """
+        assert len(load_ids) == len(idle_powers) == len(onsite_source_types)
+
+        for load_id, idle_power, gen_type in zip(load_ids, idle_powers, onsite_source_types):
+            self.__setup_data_center_with_backup_source(
+                grid=grid,
+                load_id=load_id,
+                idle_power=idle_power,
+                onsite_source_type=gen_type
+            )
+        
+        grid.assign_grid_gen_percentage_renewable(
+            renewable_share      = renewable_share,
+            assign_random_source = False
+        ) 
+            
+
+    def __setup_data_center_with_backup_source(
+        self,
+        grid: DatacenterGrid,
+        load_id: int,
+        idle_power: float,
+        onsite_source_type: GenerationType
+    ) -> None:
+        """
+        Sets up a data center load with an onsite generation source.
+
+        The onsite generation source is used before electricity from other sources
+        in the grid are used.
+        
+        Args:
+            load_id:            The load id of the data center to set up
+            idle_power:         The idle power demand of the data center
+            onsite_source_type: The type of the onsite generation source to create
+        """
+        assign_dc_success: bool = grid.assign_new_data_center(
+            load_id     = load_id,
+            idle_power  = idle_power
+        )
+        assert assign_dc_success
+
+        # Ensures that onsite generation supplies all of dc's idle demand
+        assign_renewable_success: bool = grid.create_source_next_to_dc(
+            load_id     = load_id,
+            max_p_mw    = idle_power * OVERPROVISION_FACTOR,
+            gen_type    = onsite_source_type
+        )
+        assert assign_renewable_success
+        
+
+    def step(self) -> None:
         """ 
         Runs the simulation flow, records data including carbon intensity and 
         emissions.
         """
-        carbon_intensities = np.zeros(shape=len(self._grids))
+        carbon_intensities = np.zeros(shape=self._num_grids)
+
         # Power flow required for each grid to update grid metrics
         for idx, grid in enumerate(self._grids):
-            grid.run_flow(weather_index=weather_index)
+            
+            grid.run_flow(weather_index=self._weather_index, weather_variation=self._grid_config.enable_weather_variation)
+            print(f"[step]   Grid {idx} carbon intensity: {grid.get_grid_carbon_intensity():.2f} gCO2eq/kWh, carbon emission rate: {grid.get_grid_carbon_emission_rate():.2f} gCO2eq/s")
             self._observer.record_metrics(
                 grid_idx=idx, 
                 carbon_intensity=grid.get_grid_carbon_intensity(), 
@@ -151,7 +225,16 @@ class GridSimulation:
             )
             carbon_intensities[idx] = grid.get_grid_carbon_intensity()
 
-        if not shifting_enabled:
+        if not self._grid_config.enable_weather_variation:
+            return
+
+        # We shift only if there is a noticeable difference in carbon intensity
+        should_shift = not np.allclose(
+            carbon_intensities, 
+            carbon_intensities[0], 
+            atol=self._shifting_threshold
+        )
+        if not should_shift:
             return
 
         # Shift data center load based on diffference in carbon intensity
@@ -167,7 +250,7 @@ class GridSimulation:
             if idx == lowest_ci_grid_idx:
                 continue
 
-            # TODO: Right now, shifting done by shifting a percntage of original workload
+            # TODO: Right now, shifting done by shifting a percentage of original workload
             # Try shifting amount proprotional to difference in carbon intensity
             # diff_ci = carbon_intensities[idx] - carbon_intensities[lowest_ci_grid_idx]
             dc_ids = grid.get_data_center_load_ids()
@@ -190,45 +273,42 @@ class GridSimulation:
             loads    = new_target_dc_power
         )
 
+        
+    def __shift_load(
+        self, 
+        from_grid: DatacenterGrid, 
+        to_grid: DatacenterGrid, 
+    ) -> None:
+        """
+        Shifts load for a specific data center from one grid to another.
+
+        Args:
+            from_grid:     The grid to shift load from
+            to_grid:       The grid to shift load to
+        """
+        from_dc_ids = from_grid.get_data_center_load_ids()
+        from_dc_loads = from_grid.get_data_center_active_power(from_dc_ids)
+        shift_amounts = [ load * _SHIFT_PROPORTION for load in from_dc_loads ]
+        new_from_dc_loads = [ og - shift for og, shift in zip(from_dc_loads, shift_amounts) ]
+        from_grid.set_data_center_active_power(
+            load_ids = from_dc_ids,
+            loads    = new_from_dc_loads
+        )
+        total_shift_amount = sum(shift_amounts)
+        to_dc_ids = to_grid.get_data_center_load_ids()
+        to_dc_loads = to_grid.get_data_center_active_power(to_dc_ids)
+        new_to_dc_loads = [ og + total_shift_amount / len(to_dc_ids) for og in to_dc_loads ]
+        to_grid.set_data_center_active_power(
+            load_ids = to_dc_ids, 
+            loads    = new_to_dc_loads
+        ) 
+
+
     def generate_plots(self) -> None:
         """
         Generates and saves all relevant plots for the simulation results.
         """
         self._observer.plot_ci_data(save_path="carbon_intensity.png")
-
-
-    # def plot_ci(self) -> None:
-    #     """
-    #     Plots the average carbon intensity over time for each data center grid.
-    #     """
-    #     # Safety check in case plot is called before run
-    #     if not self._ci_data:
-    #         print("No data to plot. Please call run() first.")
-    #         return
-
-    #     plt.figure(figsize=(10, 6))
-    #     num_grids = len(self._ci_data)
-
-    #     # Extract and plot the data for each grid separately
-    #     for i in range(num_grids):
-    #         grid_ci = self._ci_data[i]
-    #         plt.plot(
-    #             range(len(grid_ci)), 
-    #             grid_ci, 
-    #             label=f"Grid {i} (Datacenter)", 
-    #             linewidth=2
-    #         )
-
-    #     # Formatting the chart for readability
-    #     plt.title("Regional Grid Carbon Intensity Over Time")
-    #     plt.xlabel("Time Step (Weather Index)")
-    #     plt.ylabel("Carbon Intensity")
-    #     plt.grid(True, linestyle='--', alpha=0.7)
-    #     plt.legend(loc="upper right")
-    #     plt.tight_layout()
-        
-    #     # Display the plot
-    #     plt.show()
 
 
 # Time period: 2020-08-01 ~ 2020-08-31

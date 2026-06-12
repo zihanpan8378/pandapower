@@ -1,26 +1,75 @@
 import yaml
 
+from collections import defaultdict
+from grid_regions import GridRegion
 from typing import List
+from pandapower import pandapowerNet
 
 
-class GridSimConfig:
+class DataCenterConfig:
     """
-    Class that handles loading the grid simulator config from yaml file.
+    Class that represents the configuration for a data center 
     """
 
-    def __init__(self, config_yaml: str) -> None:
+    def __init__(
+        self, 
+        region: GridRegion, 
+        load_share: float, 
+    ) -> None:
         """
-        Creates an instance of the GridSimConfig class. 
+        Initializes the DataCenterConfig object.
+        
+        Args:
+            region: The grid region the data center is located in
+            load_share: The share of the total load that the data center is responsible for
+        """
+        self.region = region
+        self.load_share = load_share
+
+
+class GridConfig:
+    """
+    Class that represents the configuration for a grid
+    """
+
+    def __init__(
+        self, 
+        enable_weather_variation: bool, 
+        onsite_overprovision_factor: float,
+        pp_grid: pandapowerNet,
+        renewable_share: float
+    ) -> None:
+        """
+        Initializes the GridConfig object. 
 
         Args:
-            config_yaml: The path to the config file to load.
+            enable_weather_variation: A boolean that indicates whether to enable weather variation in the simulation. 
+            onsite_overprovision_factor: A float that indicates the overprovision factor for onsite generation capacity compared to the data center load.
+            renewable_share: A float that indicates the percentage of renewable energy in the grid.
         """
-        data: dict
-        with open(config_yaml, "r") as stream:
-            try:
-                data = yaml.safe_load(stream)
-            except yaml.YAMLError as exc:
-                print(f"Error parsing YAML file: {exc}")
+        self.grid_regions: defaultdict[
+            GridRegion, List[DataCenterConfig]
+        ]                                           = defaultdict(list)
+        self.enable_weather_variation: bool         = enable_weather_variation
+        self.onsite_overprovision_factor: float     = onsite_overprovision_factor
+        self.pp_grid: pandapowerNet                 = pp_grid
+        self.renewable_share: float                 = renewable_share
 
-        all_grids = data["grids"] 
-        self.grid_config: List[dict] = [item for _, item in all_grids.items()]
+        
+    def add_grid_region(
+        self, 
+        region: GridRegion, 
+        data_center_config: DataCenterConfig
+    ) -> None:
+        """
+        Adds a grid region and its corresponding data center configuration to the grid config.
+
+        Args:
+            region: The grid region to add
+            data_center_config: The data center configuration corresponding to the grid region
+        """
+        self.grid_regions[region].append(data_center_config)
+
+    
+
+        

@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandapower as pp
 import math
+import random
 import pandas as pd
 
 from pandapower import pandapowerNet
@@ -9,18 +10,16 @@ from typing import List, Dict
 
 from run_bialek import (
     calculate_source_to_load_contributions, 
-    gross_gen_demand,
-    GENERATION_SOURCES
+    PP_GENERATION_SOURCES
 )
 from constants import (
-    RENEWABLE_SOURCE_TYPES, 
     CARBON_INTENSITIES,
     ALLOWED_GRID_REGIONS,
     WEATHER_DATA_PATHS
 )
 from process_grid import ProcessGrid
-
-_DEFAULT_ENERGY_SOURCE: str = "coal"
+from generation_types import GenerationType
+from grid_regions import GridRegion
 
 
 class DatacenterGrid:
@@ -33,7 +32,7 @@ class DatacenterGrid:
         _renewable_sources: List of pandapower gen id that are renewable sources
     """
 
-    def __init__(self, net: pandapowerNet, grid_region: str) -> None:
+    def __init__(self, net: pandapowerNet, grid_region: GridRegion) -> None:
         """
         Creates an instance of the DataCenterGrid class.
 
@@ -57,7 +56,7 @@ class DatacenterGrid:
         # We take the maximum wind speed to support proportional power scaling
         # based on wind speed at given time
         # We don't need to do this for cloud cover, which is already in interval[0, 100]
-        self._max_wind_speed = self._weather_data.loc[:, "windspeed_10m"].max()
+        self._max_wind_speed = self._weather_data["windspeed_10m"].max()
         self.process_grid = ProcessGrid()
 
         # We label energy sources and data center loads inside pandapower net
@@ -97,8 +96,8 @@ class DatacenterGrid:
         """
         Retrieves the load ids of data centers.
         """
-        load_idices = self._net.load.index[self._net.load[self._dc_label] == True].tolist()
-        return load_idices
+        load_indicies = self._net.load.index[self._net.load[self._dc_label] == True].tolist()
+        return load_indicies
 
 
     def set_data_center_active_power(
@@ -143,9 +142,9 @@ class DatacenterGrid:
     def assign_renewable_source(
         self, 
         gen_id: int, 
-        gen_type: str,
+        gen_type: GenerationType,
         max_p_mw: float
-    ) -> bool:
+    ) -> None:
         """
         Mark a 'gen' element as a renewable source.
 
@@ -155,17 +154,128 @@ class DatacenterGrid:
             max_p_mw: The maximum power generation of the source
                       This is different from the pandapower maximum p_mw
                       which will change depending on weather
+        """
+        # Casting GenerationType to str gives the label name (i.e. coal, solar)
+        self._net.gen.loc[gen_id, self._source_label] = str(gen_type)
+        self._net.gen.loc[gen_id, self._power_limit_label] = max_p_mw
+
+    
+    def assign_grid_gen_percentage_renewable(
+        self, 
+        renewable_share: float,
+        assign_random_source: bool
+    ) -> None:
+        """
+        Assigns a percentage of the generators in the grid to be renewable sources.
+
+        Uses a greedy approximation approach where we assign renewable sources to the largest generators in the grid
+        until we reach the desired percentage of renewable generation capacity.
+
+        Args:
+            renewable_share: The share of renewable generation capacity
+            assign_random_source: Whether to assign random renewable source types
+        """
+        # Only consider in service generators for renewable source assignment
+        valid_gens = self._net.gen[self._net.gen["in_service"] == True].copy()
+
+        total_p_mw = valid_gens["p_mw"].sum()
+        target_p_mw = total_p_mw * renewable_share
+       
+        # Sor tthe
+        sorted_gens = valid_gens.sort_values(by="p_mw", ascending=False) 
+        selected_generator_indices = []
+        accumulated_renewable_p_mw = 0.0
+    
+        for idx, row in sorted_gens.iterrows():
+            gen_p_mw = row["p_mw"]
+
+            # If adding this generator keeps us under the target, we add it as a renewable source.
+            if accumulated_renewable_p_mw <= target_p_mw:
+                selected_generator_indices.append(idx) 
+                accumulated_renewable_p_mw += gen_p_mw
+            else:
+                # Check if adding this generator would get us closer to target compared to not adding it
+                if (abs(accumulated_renewable_p_mw - target_p_mw) 
+                    > abs(accumulated_renewable_p_mw - gen_p_mw - target_p_mw)):
+                    selected_generator_indices.append(idx)
+                    accumulated_renewable_p_mw += gen_p_mw
+                break
+                
+        # TODO: change to parameter?
+        gen_type = GenerationType.SOLAR
+        for gen_id in selected_generator_indices:
+            if assign_random_source:
+                gen_type = random.choice(list(GenerationType))
+
+            current_max_p_mw: float = self._net.gen.loc[gen_id, "p_mw"] # type: ignore
+            self.__assign_renewable_source(
+                gen_id   = gen_id, 
+                gen_type = gen_type, 
+                max_p_mw = current_max_p_mw
+            ) 
+            
+    
+    def create_source_next_to_dc(
+        self, 
+        load_id: int, 
+        gen_type: GenerationType,
+        max_p_mw: float,
+    ) -> bool:
+        """
+        Creates a new renewable source next to a data center load.
+
+        Args:
+            load_id:    The id of the data center load
+            gen_type:   The type of renewable source
+            max_p_mw:   The maximum power generation of the source
 
         Returns:
-            Whether the generator was marked succesfully
+            Whether the generator was created successfully
         """
-        if (gen_id not in self._net.gen.index.values
-            or gen_type not in RENEWABLE_SOURCE_TYPES):
-            return False
+        # Find the bus to which the load is connected
+        target_bus = self._net.load.loc[load_id, "bus"]
 
-        self._net.gen.loc[gen_id, self._source_label] = gen_type
-        self._net.gen.loc[gen_id, self._power_limit_label] = max_p_mw
-        return True
+        # Generator must be connected via a different line rather than the same bus 
+        # to avoid loss of information when running bialek's tracing algorithm
+        voltage_level = self._net.bus.loc[target_bus, "vn_kv"] # type: ignore
+        new_bus_id = pp.create_bus(
+            net     = self._net, 
+            name    = f"bus_for_gen_{load_id}", 
+            vn_kv   = voltage_level
+        )
+        
+        # We set aribtray constants for the line since it doesn't affect DC optimal power flow results
+        pp.create_line_from_parameters(
+            net             = self._net,
+            from_bus        = new_bus_id,
+            to_bus          = target_bus, # type: ignore
+            length_km       = 0.1,
+            r_ohm_per_km    = 0.1,
+            x_ohm_per_km    = 0.1,
+            c_nf_per_km     = 0,
+            max_i_ka        = 1.0
+        )
+
+        # We overprovision the onsite generator capacity to support more than the dc's idle load
+        # This is to ensure the dc starts off using onsite generation
+        new_gen_id = pp.create_gen(
+            net     = self._net,
+            bus     = new_bus_id,
+            p_mw    = max_p_mw
+        )
+
+        # Poly cost required to dispatch the generator in optimal power flow
+        pp.create_poly_cost(
+            net             = self._net,
+            element         = new_gen_id,
+            et              = "gen",
+            cp0_eur         = 0.0,
+            cp1_eur_per_mw  = 0.0,
+            cp2_eur_per_mw2 = 0.0
+        )
+
+        # Mark the generator as a renewable source
+        return self.assign_renewable_source(new_gen_id, gen_type, max_p_mw) # type: ignore
 
     
     def get_grid_carbon_intensity(self) -> float:
@@ -276,20 +386,20 @@ class DatacenterGrid:
         and more.
         """
         # self.process_grid.modify_non_datacenter_load(
-        #     net=self._net, data_centers=self._data_centers
+        #     net=self._net, dc_label=self._dc_label
         # )
         self.process_grid.sync_generator_costs(
             net=self._net, source_label=self._source_label
         )
-        self.process_grid.sync_generator_limits(
-            net=self._net, source_label=self._source_label
-        )
+        # self.process_grid.sync_generator_limits(
+        #     net=self._net, source_label=self._source_label
+        # )
         self.process_grid.unconstrain_tranmission(
             net=self._net
         )
 
 
-    def run_flow(self, weather_index: int) -> None:
+    def run_flow(self, weather_index: int, weather_variation: bool) -> None:
         """
         Runs a power flow analysis for this grid.
         """
@@ -298,17 +408,31 @@ class DatacenterGrid:
         cloudcover = current_weather["cloudcover"]
         windspeed = current_weather["windspeed_10m"]
     
+        # TODO: Change to use dynamic dispatch for calculating power, based on source
         solar_mask = self._net.gen[self._source_label] == "solar"
         wind_mask = self._net.gen[self._source_label] == "wind"
+        coal_mask = self._net.gen[self._source_label] == "coal"
+
         solar_power_capacity = self._net.gen.loc[solar_mask, self._power_limit_label]
         wind_power_capacity = self._net.gen.loc[wind_mask, self._power_limit_label]
+        coal_power_capacity = self._net.gen.loc[coal_mask, self._power_limit_label]
 
         # Solar power is inversely proportional to cloud cover
         # Wind power is proportional to wind speed
-        self._net.gen.loc[solar_mask, "max_p_mw"] = solar_power_capacity * (1 - cloudcover / 100)
-        self._net.gen.loc[wind_mask, "max_p_mw"] = wind_power_capacity * windspeed / self._max_wind_speed
+        if weather_variation:
+            self._net.gen.loc[solar_mask, "max_p_mw"] = solar_power_capacity * (1 - cloudcover / 100)
+            self._net.gen.loc[wind_mask, "max_p_mw"] = wind_power_capacity * windspeed / self._max_wind_speed
+        else:
+            self._net.gen.loc[solar_mask, "max_p_mw"] = solar_power_capacity
+            self._net.gen.loc[wind_mask, "max_p_mw"] = wind_power_capacity
+            
+        self._net.gen.loc[coal_mask, "max_p_mw"] = coal_power_capacity
 
+        self._net.gen["p_mw"] = 0.0
+
+        # pp.rundcopp(self._net, verbose=True)
         pp.rundcopp(self._net)
+
 
 
     def get_gross_load_demand(self) -> float:
@@ -361,7 +485,7 @@ class DatacenterGrid:
         """
         power_limit_label: str = "power_limit"
         for gen_id in self._net.gen.index.values:
-            self._net.gen.loc[gen_id, power_limit_label] = self._net.gen.loc[gen_id, "max_p_mw"]
+            self._net.gen.loc[gen_id, power_limit_label] = SOURCE_LIMITS["coal"]
         return power_limit_label
 
     
@@ -374,7 +498,7 @@ class DatacenterGrid:
         """
         total_generation_mw: float = 0.0
         for _, res in GENERATION_SOURCES:
-            p_mw = self._net[res]["p_mw"]
+            p_mw = self._net[res]["p_mw"].clip(lower=0)
             total_generation_mw += p_mw.sum()
         return total_generation_mw
     

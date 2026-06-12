@@ -5,7 +5,7 @@ from typing import Tuple
 
 
 # All types of line elements and their corresponding powerflow result, bus connection, and active power columns
-BRANCH_SPECS = (
+PP_BRANCH_SPECS = (
     # (element_table, result_table, from_col,  to_col,   flow_col)
     ("line",      "res_line",      "from_bus", "to_bus", "p_from_mw"),
     ("trafo",     "res_trafo",     "hv_bus",   "lv_bus", "p_hv_mw"),
@@ -14,7 +14,7 @@ BRANCH_SPECS = (
 
 # Types of generation components considered by this bialek's tracing implementation for gross supply,
 # and their corresponding powerflow result column
-GENERATION_SOURCES = [
+PP_GENERATION_SOURCES = [
     ("ext_grid", "res_ext_grid"),
     ("gen", "res_gen"),     # Voltage-controlled generatos
     ("sgen", "res_sgen"),   # Constant power generators
@@ -23,7 +23,7 @@ GENERATION_SOURCES = [
 
 # Types of demand components considered by this bialek's tracing implementation for gross demand,
 # and their correspodning poweflow result column
-DEMAND_SOURCES = [
+PP_DEMAND_SOURCES = [
     ("load", "res_load"),
     ("shunt", "res_shunt"),
     ("ward", "res_ward"),
@@ -52,7 +52,7 @@ def _collect_branches(net: pandapowerNet) -> Tuple[np.ndarray, np.ndarray, np.nd
     from_ids, to_ids, flows = [], [], []
 
     # Collect all the branch flows for all possible pandapower line elements
-    for elem, res, from_col, to_col, flow_col in BRANCH_SPECS:
+    for elem, res, from_col, to_col, flow_col in PP_BRANCH_SPECS:
 
         if elem not in net or len(net[elem]) == 0:
             continue
@@ -235,11 +235,11 @@ def gross_gen_demand(net: pandapowerNet) -> Tuple[np.ndarray, np.ndarray]:
                 P_D[bus_idx_map[bus_id]] += -val
 
     # Check all possible generation sources for determining gross generation
-    for source in GENERATION_SOURCES:
+    for source in PP_GENERATION_SOURCES:
         _update_gross_generation(source)
 
     # Check all possible demand sources for determining gross generation
-    for source in DEMAND_SOURCES:
+    for source in PP_DEMAND_SOURCES:
         _update_gross_demand(source)
 
     return P_G, P_D
