@@ -5,6 +5,8 @@ import pandapower.networks as pn
 from simulation_interface import GridSimulation
 from typing import List
 from pandapower import pandapowerNet
+from sim_config import GridConfig, DataCenterConfig
+from grid_regions import GridRegion
 
 
 
@@ -25,26 +27,26 @@ def run_simulation():
     """
     Main function to run the grid simulation. Initializes the simulation interface, runs the simulation, and plots the results.
     """
-    print(f"[init] Loading simulation config from {sim_config_path}")
-    num_grids = 2
-    raw_grids: List[pandapowerNet] = [pn.case300() for _ in range(num_grids)] # type: ignore
-    print(f"[init] Initializing {num_grids} grid(s)...")
-    sim_interface = GridSimulation(sim_config=sim_config_path, raw_grids=raw_grids)
-    print(f"[init] Grids initialized. Starting simulation for {_MAX_TIME_STEP} time steps.")
+    # Define the grid configuration and data center configuration for the simulation
+    grid_config = GridConfig(
+            pp_grid=pn.case300(), # type: ignore
+            renewable_share=0.3, 
+            region=GridRegion.CA_ON
+        )
+    data_center_config = DataCenterConfig(
+        load_share=0.5, 
+        onsite_overprovision_factor=1.1
+    )
+    load_id = grid_config.add_data_center(data_center_config)
 
-    for time_step in range(_MAX_TIME_STEP):
-        if time_step % 10 == 0:
-            print(f"[step] Time step {time_step}/{_MAX_TIME_STEP}")
-
-        # For simplicity, we use the same weather index for all grids at each time step.
-        # In a more complex simulation, each grid could have its own weather profile.
-        nets = [grid._net for grid in sim_interface._grids]
-        total_generations = [net.res_gen["p_mw"].sum() for net in nets]
-        total_loads = [net.load["p_mw"].sum() for net in nets]
-        print(f"  Total generation: {total_generations}, Total load: {total_loads}")
-        sim_interface.step(shifting_enabled=True, weather_index=time_step)
+    # Initialize the grid simulation interface with the defined configurations
+    sim_interface = GridSimulation(
+        grid_configs=[grid_config],
+        shifting_threshold=10.0,
+        enable_weather_variation=False
+    )
+    
         
-    # sim_interface.step(shifting_enabled=True, weather_index=0)
     # net = sim_interface._grids[0]._net
     # net.gen.to_csv("gen_output.csv") 
     # net.poly_cost.to_csv("poly_cost_output.csv")
@@ -53,10 +55,9 @@ def run_simulation():
     # net.res_ext_grid.to_csv("ext_grid_output.csv")
 
     print(f"[done] Simulation complete. Generating plots...")
-    sim_interface.generate_plots()
+    # sim_interface.generate_plots()
     print(f"[done] Plots saved.")
     
     
 if __name__ == "__main__":
     run_simulation() 
-    

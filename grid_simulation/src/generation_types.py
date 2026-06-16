@@ -67,3 +67,4 @@ class GenerationTypeCost():
             The cubic cost for the generation type
         """
         return 0.0
+

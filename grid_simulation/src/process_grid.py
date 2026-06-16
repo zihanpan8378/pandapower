@@ -2,12 +2,9 @@ import numpy as np
 
 from typing import List
 from pandapower import pandapowerNet
-from constants import (
-    SOURCE_LIMITS,
-    SOURCE_BASE_COSTS,
-    SOURCE_LINEAR_COSTS
-)
-from run_bialek import GENERATION_SOURCES
+from run_bialek import PP_GENERATION_SOURCES
+from generation_types import GenerationType, GenerationTypeCost
+from constants import ONSITE_GENERATION_BASE_COST, ONSITE_GENERATION_COST_PER_MW, ONSITE_GENERATION_COST_PER_MW2
 
 
 class ProcessGrid:
@@ -39,7 +36,7 @@ class ProcessGrid:
     #                 net[elem].loc[source_mask, "min_p_mw"] = 0.0 
 
 
-    def sync_generator_costs(self, net: pandapowerNet, source_label: str) -> None:
+    def sync_generator_costs(self, net: pandapowerNet, source_label: str, onsite_gen_label: str) -> None:
         """
         Updates costs for all elements in poly_cost. 
         
@@ -54,22 +51,31 @@ class ProcessGrid:
         net.poly_cost["cp1_eur_per_mw"] = 0.0
         net.poly_cost["cp2_eur_per_mw2"] = 0.0
 
-        for elem, _ in GENERATION_SOURCES:
+        for elem, _ in PP_GENERATION_SOURCES:
             if elem not in net or len(net[elem]) == 0:
                 continue
             source_types = net[elem][source_label]
 
-            # TODO: code smell
-            for source_type, base_cost in SOURCE_BASE_COSTS.items():
-                source_mask = (source_types == source_type)
+            for source_type in GenerationType:
+                source_mask = (source_types == source_type.value)
                 matched_indices = net[elem].index[source_mask]
                 if source_mask.any():
                     # We update the cost for all elements of this type 
                     # with the same generation source type being considered
                     mask = (net.poly_cost["element"].isin(matched_indices) 
                             & (net.poly_cost["et"] == elem))
-                    net.poly_cost.loc[mask, "cp0_eur"] = base_cost
-                    net.poly_cost.loc[mask, "cp1_eur_per_mw"] = SOURCE_LINEAR_COSTS[source_type]
+                    net.poly_cost.loc[mask, "cp0_eur"] = GenerationTypeCost(source_type).base_cost
+                    net.poly_cost.loc[mask, "cp1_eur_per_mw"] = GenerationTypeCost(source_type).linear_cost
+                    net.poly_cost.loc[mask, "cp2_eur_per_mw2"] = GenerationTypeCost(source_type).quadratic_cost
+                    net.poly_cost.loc[mask, "cp3_eur_per_mw3"] = GenerationTypeCost(source_type).cubic_cost
+
+        # Separate cost structure for onsite generation sources
+        onsite_mask = net.gen[onsite_gen_label] == True
+        onsite_gen_indices = net.gen.index[onsite_mask]
+        gen_mask = (net.poly_cost["element"].isin(onsite_gen_indices) & (net.poly_cost["et"] == "gen"))
+        net.poly_cost.loc[gen_mask, "cp0_eur"] = ONSITE_GENERATION_BASE_COST
+        net.poly_cost.loc[gen_mask, "cp1_eur_per_mw"] = ONSITE_GENERATION_COST_PER_MW
+        net.poly_cost.loc[gen_mask, "cp2_eur_per_mw2"] = ONSITE_GENERATION_COST_PER_MW2
 
 
     def modify_non_datacenter_load(

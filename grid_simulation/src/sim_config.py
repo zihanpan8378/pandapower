@@ -13,8 +13,8 @@ class DataCenterConfig:
 
     def __init__(
         self, 
-        region: GridRegion, 
         load_share: float, 
+        onsite_overprovision_factor: float
     ) -> None:
         """
         Initializes the DataCenterConfig object.
@@ -22,9 +22,11 @@ class DataCenterConfig:
         Args:
             region: The grid region the data center is located in
             load_share: The share of the total load that the data center is responsible for
+            onsite_overprovision_factor: A float that indicates the overprovision factor for 
+                                         onsite generation capacity compared to the data center load.
         """
-        self.region = region
-        self.load_share = load_share
+        self.load_share                     = load_share
+        self.onsite_overprovision_factor    = onsite_overprovision_factor
 
 
 class GridConfig:
@@ -34,10 +36,9 @@ class GridConfig:
 
     def __init__(
         self, 
-        enable_weather_variation: bool, 
-        onsite_overprovision_factor: float,
         pp_grid: pandapowerNet,
-        renewable_share: float
+        renewable_share: float,
+        region: GridRegion
     ) -> None:
         """
         Initializes the GridConfig object. 
@@ -46,30 +47,26 @@ class GridConfig:
             enable_weather_variation: A boolean that indicates whether to enable weather variation in the simulation. 
             onsite_overprovision_factor: A float that indicates the overprovision factor for onsite generation capacity compared to the data center load.
             renewable_share: A float that indicates the percentage of renewable energy in the grid.
+            region: The grid region the configuration is for.
         """
-        self.grid_regions: defaultdict[
-            GridRegion, List[DataCenterConfig]
-        ]                                           = defaultdict(list)
-        self.enable_weather_variation: bool         = enable_weather_variation
-        self.onsite_overprovision_factor: float     = onsite_overprovision_factor
         self.pp_grid: pandapowerNet                 = pp_grid
         self.renewable_share: float                 = renewable_share
-
-        
-    def add_grid_region(
-        self, 
-        region: GridRegion, 
-        data_center_config: DataCenterConfig
-    ) -> None:
-        """
-        Adds a grid region and its corresponding data center configuration to the grid config.
-
-        Args:
-            region: The grid region to add
-            data_center_config: The data center configuration corresponding to the grid region
-        """
-        self.grid_regions[region].append(data_center_config)
+        self.region: GridRegion                     = region
+        self.data_centers: List[DataCenterConfig]   = []        
 
     
+    def add_data_center(self, data_center_config: DataCenterConfig) -> int:
+        """
+        Adds a data center configuration to the grid configuration.
+
+        Args:
+            data_center_config: The configuration for the data center to be added
+
+        Returns:
+            The load id for the added data center.
+        """
+        self.data_centers.append(data_center_config)
+        return len(self.data_centers) - 1
+
 
         

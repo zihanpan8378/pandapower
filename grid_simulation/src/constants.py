@@ -3,33 +3,20 @@ import os
 from typing import List, Dict
 
 from grid_regions import GridRegion
+from generation_types import GenerationType
 
-
-OVERPROVISION_FACTOR: float = 0.7
 
 # https://zenodo.org/records/17404776
 # Carbon intensity values in gCO2eq/kwh sourced from above paper
-CARBON_INTENSITIES: Dict[str, float] = {
-    "coal": 95.0,
-    "solar": 45.0,
-    "wind": 11.0
+CARBON_INTENSITIES: Dict[GenerationType, float] = {
+    GenerationType.COAL: 95.0,
+    GenerationType.SOLAR: 45.0,
+    GenerationType.WIND: 0.0 # 11.0
 }
 
-# TODO: change energy costs, other constants to be per type based
-NONRENEWABLE_BASE_COST: float = 100_000_000.0
-RENEWABLE_BASE_COST: float = 100.0
-
-SOURCE_BASE_COSTS: Dict[str, float] = {
-    "coal": NONRENEWABLE_BASE_COST,
-    "solar": RENEWABLE_BASE_COST,
-    "wind": RENEWABLE_BASE_COST
-}
-
-SOURCE_LINEAR_COSTS: Dict[str, float] = {
-    "coal": 10.0,
-    "solar": 0.0,
-    "wind": 0.0
-}
+ONSITE_GENERATION_BASE_COST: float = 0.0
+ONSITE_GENERATION_COST_PER_MW: float = 0.0
+ONSITE_GENERATION_COST_PER_MW2: float = 0.0
 
 # Define paths for weather data per region
 weather_data_base_path = "/mnt/grid-cloud-migration-estimates_copy/data/weather"
