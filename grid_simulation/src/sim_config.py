@@ -37,7 +37,6 @@ class GridConfig:
     def __init__(
         self, 
         pp_grid: pandapowerNet,
-        renewable_share: float,
         region: GridRegion
     ) -> None:
         """
@@ -50,7 +49,6 @@ class GridConfig:
             region: The grid region the configuration is for.
         """
         self.pp_grid: pandapowerNet                 = pp_grid
-        self.renewable_share: float                 = renewable_share
         self.region: GridRegion                     = region
         self.data_centers: List[DataCenterConfig]   = []        
 

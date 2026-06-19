@@ -45,7 +45,7 @@ class GenerationTypeCost():
         if self.source_type == GenerationType.COAL:
             return 10.0
         else:
-            return 0.0
+            return 2.0
 
     @property
     def quadratic_cost(self) -> float:
