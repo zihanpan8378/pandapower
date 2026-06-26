@@ -1,9 +1,7 @@
-import yaml
-
-from collections import defaultdict
 from grid_regions import GridRegion
 from typing import List
 from pandapower import pandapowerNet
+from generation_types import GenerationType
 
 
 class DataCenterConfig:
@@ -14,7 +12,8 @@ class DataCenterConfig:
     def __init__(
         self, 
         load_share: float, 
-        onsite_overprovision_factor: float
+        onsite_overprovision_factor: float,
+        onsite_generation_source: GenerationType
     ) -> None:
         """
         Initializes the DataCenterConfig object.
@@ -24,9 +23,11 @@ class DataCenterConfig:
             load_share: The share of the total load that the data center is responsible for
             onsite_overprovision_factor: A float that indicates the overprovision factor for 
                                          onsite generation capacity compared to the data center load.
+            onsite_generation_source: The type of generation source to use for onsite generation.
         """
         self.load_share                     = load_share
         self.onsite_overprovision_factor    = onsite_overprovision_factor
+        self.onsite_generation_source       = onsite_generation_source
 
 
 class GridConfig:
@@ -37,7 +38,8 @@ class GridConfig:
     def __init__(
         self, 
         pp_grid: pandapowerNet,
-        region: GridRegion
+        region: GridRegion,
+        energy_profile: dict[GenerationType, float]
     ) -> None:
         """
         Initializes the GridConfig object. 
@@ -47,10 +49,12 @@ class GridConfig:
             onsite_overprovision_factor: A float that indicates the overprovision factor for onsite generation capacity compared to the data center load.
             renewable_share: A float that indicates the percentage of renewable energy in the grid.
             region: The grid region the configuration is for.
+            energy_profile: A dictionary mapping generation types to their respective shares in the grid.
         """
         self.pp_grid: pandapowerNet                 = pp_grid
         self.region: GridRegion                     = region
         self.data_centers: List[DataCenterConfig]   = []        
+        self.energy_profile: dict[GenerationType, float] = energy_profile
 
     
     def add_data_center(self, data_center_config: DataCenterConfig) -> int:

@@ -5,6 +5,7 @@ import pandas as pd
 import pandapower as pp
 
 from grid_custom import DatacenterGrid
+from grid_regions import GridRegion
 
 
 def export_network_summary(net, filename="network_summary.csv", save_csv=False):
@@ -57,7 +58,7 @@ if __name__ == "__main__":
     # grid_m = os.path.join('central-illinois-200', 'case_ACTIVSg200.m')
     # net = from_mpc(grid_m)
     net = pn.case300()
-    grid = DatacenterGrid(net=net, grid_region="CA_ON") # type: ignore
+    grid = DatacenterGrid(net=net, grid_region=GridRegion.CA_ON) # type: ignore
     # print(net.poly_cost)
     # print(net.gen)
     # print(net.line["max_i_ka"])

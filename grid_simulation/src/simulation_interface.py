@@ -59,13 +59,14 @@ class GridSimulation:
             # Load ids are based on index of data center in grid config
             load_ids = [ idx for idx in range(len(grid_config.data_centers)) ]
             max_power_shares = [ dc_config.load_share for dc_config in grid_config.data_centers ]
-            onsite_source_types = [ GenerationType.SOLAR for _ in grid_config.data_centers ]
+            onsite_source_types = [ dc_config.onsite_generation_source for dc_config in grid_config.data_centers ]
             self.__setup_grid(
                 grid                = grid,
                 grid_config         = grid_config,
                 load_ids            = load_ids,
                 max_power_shares    = max_power_shares,
                 onsite_source_types = onsite_source_types,
+                energy_profile      = grid_config.energy_profile
             )
 
         # Create the observer to record data during simnulation
@@ -83,6 +84,7 @@ class GridSimulation:
         load_ids: List[int], 
         max_power_shares: List[float], 
         onsite_source_types: List[GenerationType],
+        energy_profile: dict[GenerationType, float]
     ) -> None:
         """
         Sets up data center loads with onsite generation sources for a given grid.
@@ -113,18 +115,15 @@ class GridSimulation:
                 onsite_overprovision_factor=dc_config.onsite_overprovision_factor
             )
         
-        grid.assign_grid_generation_percentage(
-            gen_percentage = RegionGenerationShare(grid_config.region).solar_share,
-            source_type    = GenerationType.SOLAR
-        )
-        grid.assign_grid_generation_percentage(
-            gen_percentage = RegionGenerationShare(grid_config.region).wind_share,
-            source_type    = GenerationType.WIND
-        )
-        grid.fill_missing_generation_source_types(
-            source_type = GenerationType.COAL
-        )
+        # Set the energy profile for the grid, which defines the share of 
+        # each generation type in the grid's total generation
+        for gen_type, share in energy_profile.items():
+            grid.assign_grid_generation_percentage(
+                gen_percentage  = share,
+                source_type     = gen_type
+            )
         grid.create_backup_gen_for_renewables()
+        grid.fill_missing_generation_source_types(source_type = GenerationType.COAL)
         grid.simplify_grid()
             
 
@@ -149,15 +148,15 @@ class GridSimulation:
             onsite_source_type: The type of the onsite generation source to create
             onsite_overprovision_factor: The factor by which to overprovision the onsite generation
         """
-        grid.assign_new_data_center(
+        grid.assign_new_datacenter(
             load_id     = load_id,
             max_power   = max_power
         )
         # Ensures that onsite generation supplies all of dc's idle demand
         grid.create_source_next_to_dc(
-            load_id     = load_id,
-            max_p_mw    = max_power * onsite_overprovision_factor,
-            gen_type    = onsite_source_type
+            load_id         = load_id,
+            max_p_mw        = max_power * onsite_overprovision_factor,
+            energy_source   = onsite_source_type
         )
 
 
@@ -195,44 +194,6 @@ class GridSimulation:
         return target_grid.get_total_generation_mw()
 
         
-    def get_load_demand(self, grid_idx: int, load_id: int) -> float:
-        """
-        Gets the current load demand for a specific data center in the simulation.
-
-        Args:
-            grid_idx: The index of the grid containing the data center
-            load_id: The ID of the data center load to get the demand for
-
-        Returns:
-            The current load demand for the specified data center
-        """
-        target_grid = self._grids[grid_idx]
-        return target_grid.get_data_center_active_power([load_id])[0]    
-            
-        # # We shift only if there is a noticeable difference in carbon intensity
-        # should_shift = not np.allclose(
-        #     carbon_intensities, 
-        #     carbon_intensities[0], 
-        #     atol=self._shifting_threshold
-        # )
-        # if not should_shift:
-        #     return
-
-        # # Shift data center load based on diffference in carbon intensity
-        # lowest_ci_grid_idx = np.argmin(carbon_intensities)
-        # target_grid = self._grids[lowest_ci_grid_idx]
-        # num_target_dcs = len(target_grid.get_data_center_load_ids())
-        # assert num_target_dcs > 0, "Target grid for load shifting has no data centers to shift load to."
-
-        # for idx, grid in enumerate(self._grids):
-        #     if idx == lowest_ci_grid_idx:
-        #         continue
-        #     self.__shift_load(
-        #         from_grid = grid,
-        #         to_grid   = target_grid
-        #     )
-
-        
     def get_load_ids_for_region(self, region: str) -> List[int]:
         """
         Gets the load ids for a specific region in the simulation.
@@ -249,7 +210,7 @@ class GridSimulation:
         for grid in self._grids:
             grid_region: GridRegion = grid._region
             if grid_region.value == region:
-                return grid.get_data_center_load_ids()
+                return grid.get_datacenter_load_ids()
 
         raise ValueError(f"Region {region} not found in any grid in the simulation.")
 
@@ -272,9 +233,9 @@ class GridSimulation:
         """
         target_grid_idx = self.__get_grid_idx_by_region(region)
         target_grid = self._grids[target_grid_idx]
-        load_max_powers = target_grid.get_max_power_for_dcs(load_ids = load_ids)
+        load_max_powers = target_grid.get_max_power_for_datacenters(load_ids = load_ids)
         new_loads = [ max_power * utilization for max_power, utilization in zip(load_max_powers, utilizations) ]
-        target_grid.set_data_center_active_power(
+        target_grid.set_datacenter_active_power(
             load_ids = load_ids,
             loads    = new_loads
         )
@@ -300,36 +261,6 @@ class GridSimulation:
                 return idx
 
         raise ValueError(f"Region {region} not found in any grid in the simulation.")
-
-        
-    # def shift_load(
-    #     self, 
-    #     from_grid: DatacenterGrid, 
-    #     to_grid: DatacenterGrid, 
-    # ) -> None:
-    #     """
-    #     Shifts load for a specific data center from one grid to another.
-
-    #     Args:
-    #         from_grid:     The grid to shift load from
-    #         to_grid:       The grid to shift load to
-    #     """
-    #     from_dc_ids = from_grid.get_data_center_load_ids()
-    #     from_dc_loads = from_grid.get_data_center_active_power(from_dc_ids)
-    #     shift_amounts = [ load * _SHIFT_PROPORTION for load in from_dc_loads ]
-    #     new_from_dc_loads = [ og - shift for og, shift in zip(from_dc_loads, shift_amounts) ]
-    #     from_grid.set_data_center_active_power(
-    #         load_ids = from_dc_ids,
-    #         loads    = new_from_dc_loads
-    #     )
-    #     total_shift_amount = sum(shift_amounts)
-    #     to_dc_ids = to_grid.get_data_center_load_ids()
-    #     to_dc_loads = to_grid.get_data_center_active_power(to_dc_ids)
-    #     new_to_dc_loads = [ og + total_shift_amount / len(to_dc_ids) for og in to_dc_loads ]
-    #     to_grid.set_data_center_active_power(
-    #         load_ids = to_dc_ids, 
-    #         loads    = new_to_dc_loads
-    #     ) 
 
 
     def get_carbon_intensity_for_region(self, region: str) -> float:
@@ -370,6 +301,27 @@ class GridSimulation:
             grid_region: GridRegion = grid._region
             if grid_region.value == region:
                 return grid.get_grid_dispatch_price()
+
+        raise ValueError(f"Region {region} not found in any grid in the simulation.")
+
+        
+    def get_energy_profile_for_region(self, region: str) -> dict[GenerationType, float]:
+        """
+        Gets the current energy profile for a specific region in the simulation.
+        
+        Args:
+            region: The name of the region to get energy profile for
+            
+        Returns:
+            The current energy profile for the specified region
+            
+        Raises:
+            ValueError: If the specified region is not found in any grid in the simulation
+        """
+        for grid in self._grids:
+            grid_region: GridRegion = grid._region
+            if grid_region.value == region:
+                return grid.get_energy_profile()
 
         raise ValueError(f"Region {region} not found in any grid in the simulation.")
 
