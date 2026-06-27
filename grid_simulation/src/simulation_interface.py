@@ -25,16 +25,20 @@ class GridSimulation:
     """
 
     def __init__(
-        self, 
+        self,
         grid_configs: List[GridConfig],
         shifting_threshold: float,
-        enable_weather_variation: bool
+        enable_weather_variation: bool,
+        metrics_csv_path: str = "simulation_metrics.csv"
     ) -> None:
         """
         Constructs an instance of GridSimulation.
-        
+
         Args:
             grid_configs: A list of grid configuration objects.
+            shifting_threshold: The carbon-intensity threshold for load shifting.
+            enable_weather_variation: Whether renewable output varies with weather.
+            metrics_csv_path: Path the observer streams recorded metrics to.
         """
         self._grid_configs: List[GridConfig] = grid_configs
         self._num_grids: int                 = len(grid_configs)
@@ -72,8 +76,8 @@ class GridSimulation:
         # Create the observer to record data during simnulation
         grid_names = [ grid_config.region.name for grid_config in self._grid_configs ]
         self.observer = GridObserver(
-            num_grids  = self._num_grids,
-            grid_names = grid_names
+            grid_names = grid_names,
+            csv_path   = metrics_csv_path
         )
         
 
@@ -115,15 +119,12 @@ class GridSimulation:
                 onsite_overprovision_factor=dc_config.onsite_overprovision_factor
             )
         
-        # Set the energy profile for the grid, which defines the share of 
-        # each generation type in the grid's total generation
-        for gen_type, share in energy_profile.items():
-            grid.assign_grid_generation_percentage(
-                gen_percentage  = share,
-                source_type     = gen_type
-            )
+        # Set the energy profile for the grid, which defines the share of
+        # each generation type in the grid's total generation. Sources are assigned
+        # jointly so small-share sources still receive capacity instead of being
+        # starved by larger sources claiming the biggest generators first.
+        grid.assign_grid_generation_profile(energy_profile=energy_profile)
         grid.create_backup_gen_for_renewables()
-        grid.fill_missing_generation_source_types(source_type = GenerationType.COAL)
         grid.simplify_grid()
             
 
@@ -174,9 +175,10 @@ class GridSimulation:
             )
             if observe:
                 self.observer.record_metrics(
-                    grid_idx=idx, 
-                    carbon_intensity=grid.get_grid_carbon_intensity(), 
-                    carbon_emission_rate=grid.get_grid_carbon_emission_rate()
+                    grid_idx             = idx,
+                    timestamp            = date,
+                    carbon_intensity     = grid.get_grid_carbon_intensity(),
+                    carbon_emission_rate = grid.get_grid_carbon_emission_rate()
                 )
 
 

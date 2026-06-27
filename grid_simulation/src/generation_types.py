@@ -3,23 +3,28 @@ import pandas as pd
 from pandas import DataFrame
 from enum import Enum
 
-from collections.abc import Callable
-
 
 class GenerationType(Enum):
-    # We only consider utility solar, not community or C & I
+    # We only consider utility solar PV + storage
     SOLAR                   = "solar"
     SOLAR_NON_VARYING       = "solar_non_varying"
+
+    # We only consider utility wind + storage onshore
     WIND                    = "wind"
     WIND_NON_VARYING        = "wind_non_varying"
+
     COAL                    = "coal"
     BIOMASS                 = "biomass"
-    # Gas is combined cycle, not gas peaking
-    GAS                     = "gas"
-    OIL                     = "oil"
+
+    GAS_COMBINED_CYCLE      = "gas_combined_cycle"
+    GAS_PEAKING             = "gas_peaking"
+
+    CRUDE_OIL               = "oil"
     GEOTHERMAL              = "geothermal"
+
     HYDRO_RIVER             = "hydro_river"
     HYDRO_RESERVOIR         = "hydro_reservoir"
+
     MARINE                  = "marine"
     NUCLEAR                 = "nuclear"
     WASTE                   = "waste"
@@ -50,7 +55,7 @@ LINEAR_GENERATION_COST_PER_MWh: dict[GenerationType, float] = {
     GenerationType.SOLAR_NON_VARYING:           (50.0 + 131.0) / 2.0,
 
     # Price for these two sources are overriden since they are backup sources only
-    GenerationType.WIND:                        0.0,
+    GenerationType.WIND:                        (44.0 + 123.0) / 2.0,
     GenerationType.WIND_NON_VARYING:            0.0,
 
     GenerationType.COAL:                        (108.0 + 249.0) / 2.0,
@@ -59,10 +64,11 @@ LINEAR_GENERATION_COST_PER_MWh: dict[GenerationType, float] = {
     # https://www.eia.gov/outlooks/aeo/electricity_generation/pdf/LCOE_report.pdf
     GenerationType.BIOMASS:                     84.54,
     
-    GenerationType.GAS:                         (63.0 + 132.0) / 2.0,
+    GenerationType.GAS_COMBINED_CYCLE:         (63.0 + 132.0) / 2.0,
+    GenerationType.GAS_PEAKING:                (173.0 + 291.0) / 2.0,
 
     # Price of energy generation from oil depends on market
-    GenerationType.OIL:                          0.0,
+    GenerationType.CRUDE_OIL:                   0.0,
 
     GenerationType.GEOTHERMAL:                  (66.0 + 109.0) / 2.0,
     
@@ -84,8 +90,9 @@ BASE_GENERATION_COST: dict[GenerationType, float] = {
     GenerationType.WIND_NON_VARYING: 0.0,
     GenerationType.COAL: 0.0,
     GenerationType.BIOMASS: 0.0,
-    GenerationType.GAS: 0.0,
-    GenerationType.OIL: 0.0,
+    GenerationType.GAS_COMBINED_CYCLE: 0.0,
+    GenerationType.GAS_PEAKING: 0.0,
+    GenerationType.CRUDE_OIL: 0.0,
     GenerationType.GEOTHERMAL: 0.0,
     GenerationType.HYDRO_RIVER: 0.0,
     GenerationType.HYDRO_RESERVOIR: 0.0,
@@ -102,8 +109,9 @@ QUADRATIC_GENERATION_COST_PER_MWh2: dict[GenerationType, float] = {
     GenerationType.WIND_NON_VARYING: 0.0,
     GenerationType.COAL: 0.0,
     GenerationType.BIOMASS: 0.0,
-    GenerationType.GAS: 0.0,
-    GenerationType.OIL: 0.0,
+    GenerationType.GAS_COMBINED_CYCLE: 0.0,
+    GenerationType.GAS_PEAKING: 0.0,
+    GenerationType.CRUDE_OIL: 0.0,
     GenerationType.GEOTHERMAL: 0.0,
     GenerationType.HYDRO_RIVER: 0.0,
     GenerationType.HYDRO_RESERVOIR: 0.0,
@@ -117,6 +125,10 @@ QUADRATIC_GENERATION_COST_PER_MWh2: dict[GenerationType, float] = {
 # Carbon intensity values in gCO2eq/kwh sourced from above paper
 # We add the operational and embodied carbon footprint
 # CO2 Impact (gCO2eq/kWh)
+
+# Look into the following source (LCA analysis) for more justifiable values
+# Source: https://unece.org/sites/default/files/2021-11/LCA_final.pdf
+
 SOURCE_CARBON_INTENSITIES: dict[GenerationType, float] = {
     GenerationType.COAL:                790.0 + 936.0,
     GenerationType.SOLAR:               36.95,
@@ -126,8 +138,13 @@ SOURCE_CARBON_INTENSITIES: dict[GenerationType, float] = {
     GenerationType.WIND_NON_VARYING:    (44.0 + 123.0) / 2,
 
     GenerationType.BIOMASS:             1030.0 + 230.0,
-    GenerationType.GAS:                 370.0 + 434.0,
-    GenerationType.OIL:                 600.0 + 778.0,
+
+    # TODO: Gas peaking should be higher than gas combined cycle
+    # Placeholder for now 
+    GenerationType.GAS_COMBINED_CYCLE:  370.0 + 434.0,
+    GenerationType.GAS_PEAKING:         370.0 + 434.0,
+
+    GenerationType.CRUDE_OIL:           600.0 + 778.0,
     GenerationType.GEOTHERMAL:          38.0,
     GenerationType.HYDRO_RIVER:         10.7,
     GenerationType.HYDRO_RESERVOIR:     10.7,
@@ -135,3 +152,11 @@ SOURCE_CARBON_INTENSITIES: dict[GenerationType, float] = {
     GenerationType.NUCLEAR:             5.13,
     GenerationType.WASTE:               240.0 + 580.0,       
 }
+
+assert (
+    len(GenerationType) 
+    == len(SOURCE_CARBON_INTENSITIES)
+    == len(LINEAR_GENERATION_COST_PER_MWh)
+    == len(BASE_GENERATION_COST)
+    == len(QUADRATIC_GENERATION_COST_PER_MWh2)
+), "All generation types must have carbon intensity and cost values defined."

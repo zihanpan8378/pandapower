@@ -74,10 +74,14 @@ class DatacenterGrid:
         self.process_grid       = ProcessGrid()
         self._diagnostics        = GridDiagnostic(self._net) 
 
-        # We label energy sources and data center loads inside pandapower net
         self.__set_sgen_controllable()
         self.__setup_ext_grid_controllable()
 
+        # Must be the total generation of gen + sgen before additional ones are added
+        self._num_generators: float = len(self._net.gen) + len(self._net.sgen)
+        self._base_generation_mw: float = self._net.gen["max_p_mw"].sum() + self._net.sgen["max_p_mw"].sum()
+
+        # We label energy sources and data center loads inside pandapower net
         self._power_limit_label: str    = self.__initialize_energy_max_power()
         self._dc_label: str             = self.__initialize_dc_label()
         self._source_label: str         = self.__initialize_energy_source_labels()
@@ -283,26 +287,56 @@ class DatacenterGrid:
         )
 
     
-    def assign_grid_generation_percentage(
-        self, 
-        gen_percentage: float,
-        source_type: GenerationType
+    def assign_grid_generation_profile(
+        self,
+        energy_profile: dict[GenerationType, float]
     ) -> None:
         """
-        Assigns a percentage of the generators in the grid to be renewable sources.
+        Assigns source types to the grid's generators to match a target energy profile.
 
-        Uses a greedy approximation approach where we assign renewable sources to the largest generators in the grid
-        until we reach the desired percentage of renewable generation capacity.
+        Rather than filling one source at a time (which makes the largest generators
+        overshoot small targets and can starve later, small-share sources), this
+        considers every source jointly. It walks the generators largest-first and
+        assigns each to whichever source is currently furthest below its target
+        capacity (largest absolute deficit). This is the standard greedy for multiway
+        number partitioning: large sources outbid small ones for the big generators,
+        while small sources keep a positive deficit and pick up the small leftover
+        generators - so every source with a positive share gets some capacity as long
+        as enough generators exist.
+
+        Generators left unassigned (e.g. when every share is already met) keep their
+        None source type and are later defaulted by fill_missing_generation_source_types.
 
         Args:
-            gen_percentage: The percentage of generators to assign as renewable sources
-            source_type: The type of renewable source to assign
+            energy_profile: Maps each generation type to its target share of the grid's
+                            base generation capacity. Shares must sum to at most 1; any
+                            remainder is left for the default-fill pass. A profile that
+                            sums to more than 1 is infeasible (the targets exceed total
+                            capacity) and is rejected, because the largest sources would
+                            otherwise consume every generator and starve the small-share
+                            sources entirely.
+
+        Raises:
+            ValueError: If the requested shares sum to more than 1.
         """
+        # Reject over-subscribed profiles up front. If shares sum to > 1 the targets
+        # exceed the grid's capacity, the never-satisfiable large sources monopolise
+        # every generator under the most-deficient rule, and small sources silently get
+        # nothing. Normalise the profile (divide each share by the total) so it sums to
+        # at most 1 before calling this.
+        total_share = sum(share for share in energy_profile.values() if share > 0)
+        if total_share > 1.0 + 1e-9:
+            raise ValueError(
+                f"Energy profile shares sum to {total_share:.4f}, which exceeds 1.0 and "
+                f"cannot be matched by the grid's generation capacity. Normalise the "
+                f"profile so the shares sum to at most 1."
+            )
+
         # Only consider in-service grid generators that have not yet been assigned a
         # source type. Filtering on the source label (rather than the pandapower
         # "type" column, which is None for every generator) excludes the onsite
         # generator, the backup-coal generators created below, and generators already
-        # assigned in a previous pass - so none of them get reassigned or duplicated.
+        # assigned - so none of them get reassigned or duplicated.
         gen_power_map: dict[tuple[CustomGridGenElem, int], float] = {}
         valid_gens = self._net.gen[
             (self._net.gen["in_service"] == True)
@@ -320,36 +354,34 @@ class DatacenterGrid:
         for sgen in valid_sgens.index:
             gen_power_map[(CustomGridGenElem.SGEN, sgen)] = valid_sgens.loc[sgen, "max_p_mw"] # type: ignore
 
+        # The target capacity (MW) we want from each source in this grid.
+        targets: dict[GenerationType, float] = {
+            source: self._base_generation_mw * share
+            for source, share in energy_profile.items()
+            if share > 0
+        }
+        accumulated: dict[GenerationType, float] = {source: 0.0 for source in targets}
 
-        total_p_mw = self.get_max_generation_mw()
-        # The amount of generation we want from the source 'source_type' in this grid
-        target_p_mw = total_p_mw * gen_percentage
-
-        # We use max power instead of active power during the grid simulation
-        accumulated_source_p_mw: float = 0.0
-
-        # We sort the generators by their maximum power in descending order,
-        # so we can greedily select the largest generators first until we reach the target energy demand
+        # Walk generators largest-first; each is assigned to the most-deficient source.
         sorted_gens: list[tuple[tuple[CustomGridGenElem, int], float]] = sorted(
             gen_power_map.items(), key=lambda x: x[1], reverse=True)
 
-        current_idx = 0     
-        for _, max_pw in sorted_gens:
-            # Keep on adding generators until we reach 
-            # over the target source generation percentage for the grid
-            if accumulated_source_p_mw >= target_p_mw:
+        for gen_info, max_pw in sorted_gens:
+            # Only sources still below their target are eligible, so a source that has
+            # met its share stops absorbing generators (the remainder falls through to
+            # the default-fill pass). Once every source is satisfied, we are done.
+            candidates = [s for s in targets if accumulated[s] < targets[s]]
+            if not candidates:
                 break
 
-            accumulated_source_p_mw += max_pw
-            current_idx += 1
+            source_type = max(candidates, key=lambda s: targets[s] - accumulated[s])
+            accumulated[source_type] += max_pw
 
-                
-        for gen_info, max_pw in sorted_gens[:current_idx]:
             elem_type, id = gen_info
             self.__classify_generation_characteristics(
-                id              = id, 
-                gen_type        = gen_info[0],
-                energy_source   = source_type, 
+                id              = id,
+                gen_type        = elem_type,
+                energy_source   = source_type,
                 max_p_mw        = max_pw,
                 is_onsite       = False,
                 is_backup       = False
@@ -361,7 +393,12 @@ class DatacenterGrid:
                 is_onsite       = False,
                 is_backup       = False
             )
-                
+
+        # Any remaining unassigned generators are filled with the largest-share source
+        self.fill_missing_generation_source_types(
+            source_type = max(targets, key=lambda s: targets[s])
+        )
+
 
     def create_backup_gen_for_renewables(self) -> None:
         """
@@ -934,7 +971,7 @@ class DatacenterGrid:
             et_rows = self._net.poly_cost[self._net.poly_cost["et"] == elem.value]
             src = self._net[elem.value][self._source_label]
             
-            ids = src.index[src == GenerationType.OIL.value].tolist()
+            ids = src.index[src == GenerationType.CRUDE_OIL.value].tolist()
             mask = et_rows.index[et_rows["element"].isin(ids)]
             if len(mask) == 0:
                 continue
@@ -942,9 +979,9 @@ class DatacenterGrid:
             # Oil generation costs are handled separately due to their dependence on the date
             oil_cost_date     = date.strftime("%m/%d/%Y")
             oil_cost_per_mwh  = OIL_DOLLARS_PER_BARREL_BY_DAY.loc[oil_cost_date, "Price"] * PETROLEUM_BARREL_PER_MWH # type: ignore
-            self._net.poly_cost.loc[mask, "cp0_eur"] = BASE_GENERATION_COST[GenerationType.OIL]
+            self._net.poly_cost.loc[mask, "cp0_eur"] = BASE_GENERATION_COST[GenerationType.CRUDE_OIL]
             self._net.poly_cost.loc[mask, "cp1_eur_per_mw"] = oil_cost_per_mwh
-            self._net.poly_cost.loc[mask, "cp2_eur_per_mw2"] = QUADRATIC_GENERATION_COST_PER_MWh2[GenerationType.OIL]
+            self._net.poly_cost.loc[mask, "cp2_eur_per_mw2"] = QUADRATIC_GENERATION_COST_PER_MWh2[GenerationType.CRUDE_OIL]
 
        
     def __set_sgen_controllable(self) -> None:
